@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const DEBUG = true;
-const FNAME = if (DEBUG) "input.txt" else "input.txt";
+const DEBUG = false;
+const FNAME = if (DEBUG) "input_test.txt" else "input.txt";
 
 const Range = struct {
     min: u64,
@@ -50,30 +50,37 @@ const Ranges = struct {
         return Ranges{ .allocator = allocator, .ranges = .empty };
     }
 
+    fn deinit(self: *Ranges) void {
+        self.ranges.deinit(self.allocator);
+    }
+
     fn append(self: *Ranges, str: []const u8) !void {
-        const new_range = try Range.init(str);
+        var new_range = try Range.init(str);
+        var merging_range_idx: ?usize = null;
 
-        var merging_range = &new_range;
-        var merging_range_idx: usize = 0;
-        var merged_new = false;
-        var idx: usize = 0;
+        var to_delete: std.ArrayList(usize) = .empty;
+        defer to_delete.deinit(self.allocator);
 
-        while (idx < self.ranges.items.len) {
-            const r = &self.ranges.items[idx];
+        for (self.ranges.items, 0..) |*r, idx| {
+            const merging_range = if (merging_range_idx) |i| &self.ranges.items[i] else &new_range;
 
             if (merging_range.attemptMergeInto(r)) {
-                if (merged_new == true) {
-                    _ = merging_range.getRange();
-                    _ = self.ranges.orderedRemove(merging_range_idx);
-                } else idx += 1;
+                if (merging_range_idx) |i| try to_delete.append(self.allocator, i);
 
-                merging_range = r;
-                merging_range_idx = idx - 1;
-                merged_new = true;
-            } else idx += 1;
+                _ = merging_range.getRange();
+                _ = r.getRange();
+                if (DEBUG) std.debug.print("\n", .{});
+
+                merging_range_idx = idx;
+            }
         }
 
-        if (!merged_new) try self.ranges.append(self.allocator, new_range);
+        if (merging_range_idx == null) {
+            try self.ranges.append(self.allocator, new_range);
+            return;
+        }
+
+        self.ranges.orderedRemoveMany(to_delete.items);
     }
 
     fn getRange(self: *const Ranges) u64 {
@@ -99,6 +106,8 @@ pub fn main() !void {
     const delimiter = '\n';
 
     var ranges = Ranges.init(gpa);
+    defer ranges.deinit();
+
     var checking = false;
 
     while (reader.takeDelimiterExclusive(delimiter)) |item| {
